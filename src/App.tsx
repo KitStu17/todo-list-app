@@ -1,50 +1,97 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
+import TodoForm from "./components/TodoForm";
+import TodoList from "./components/TodoList";
+import { Todo } from "./types/todo";
 import "./App.css";
+import { invoke } from "@tauri-apps/api/core";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+  useEffect(() => {
+    loadTodos();
+  }, []);
+
+  const loadTodos = async () => {
+    try {
+      const result = await invoke<Todo[]>("todo_get_all");
+      setTodos(result);
+    } catch (error) {
+      console.error("Failed to load todos:", error);
+    } finally {
+      setLoading(false);
+    }
   }
 
+  const handleAdd = async (todo: Todo) => {
+    try {
+      const saved = await invoke<Todo>("todo_add", { todo });
+      setTodos((prev) => [...prev, saved]);
+      setShowForm(false);
+    } catch (error) {
+      console.error("추가 실패:", error);
+    }
+  };
+
+  const handleToggle = async (id: string) => {
+    const todo = todos.find((t) => t.id === id);
+    if(!todo) return;
+
+    const updated = {...todo, completed: !todo.completed};
+    try {
+      await invoke<Todo>("todo_update", {id, updated});
+      setTodos((prev) => 
+        prev.map((t) => (t.id === id ? updated : t))
+      );
+    } catch (error) {
+      console.error("업데이트 실패:", error);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await invoke("todo_delete", { id });
+      setTodos((prev) => prev.filter((t) => t.id !== id));
+    } catch (error) {
+      console.error("삭제 실패:", error);
+    }
+  };
+
+  const remaining = todos.filter((t) => !t.completed).length;
+
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="app">
+      <header className="app-header">
+        <h1>📅 D-Day Todo</h1>
+        <div className="header-right">
+          {remaining > 0 && (
+            <span className="badge">{remaining}개 진행중</span>
+          )}
+          <button
+            className="btn-primary"
+            onClick={() => setShowForm((prev) => !prev)}
+          >
+            {showForm ? "✕ 닫기" : "+ 추가"}
+          </button>
+        </div>
+      </header>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+      {showForm && <TodoForm onAdd={handleAdd} />}
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      <main>
+        {loading ? (
+          <div className="empty-state">불러오는 중...</div>
+        ) : (
+          <TodoList
+            todos={todos}
+            onToggle={handleToggle}
+            onDelete={handleDelete}
+          />
+        )}
+      </main>
+    </div>
   );
 }
 
