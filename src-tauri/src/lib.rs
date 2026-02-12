@@ -1,10 +1,18 @@
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Timelike};
 use dirs::data_local_dir;
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use std::fs;
 use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
+    AppHandle,
+};
+use tauri_plugin_notification::NotificationExt;
 
-// Todo 구조체 정의
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Todo {
@@ -46,14 +54,61 @@ fn write_todos(todos: &Vec<Todo>) -> Result<(), String> {
     Ok(())
 }
 
-// 남은 일수 계산
-pub fn calc_days_until(dday_str: &str) -> Option<i64> {
+fn calc_days_until(dday_str: &str) -> Option<i64> {
     let dday = NaiveDate::parse_from_str(dday_str, "%Y-%m-%d").ok()?;
     let today = chrono::Local::now().date_naive();
     Some((dday - today).num_days())
 }
 
-// CRUD 함수들
+// 알림 체크 함수
+fn check_notifications(app: &AppHandle) {
+    let todos = read_todos();
+    let now = chrono::Local::now();
+    let current_time = format!("{:02}:{:02}", now.hour(), now.minute());
+
+    for todo in todos {
+        if todo.completed {
+            continue;
+        }
+
+        let Some(days_until) = calc_days_until(&todo.dday) else {
+            continue;
+        };
+
+        // 알림 시간과 현재 시간이 일치하는지 확인
+        if todo.notification_time != current_time {
+            continue;
+        }
+
+        // notify_days에 해당하는 날인지 확인
+        if todo.notify_days.contains(&days_until) {
+            let body = if days_until == 0 {
+                format!("오늘이 D-Day입니다! - {}", todo.title)
+            } else {
+                format!("D-{} - {}", days_until, todo.title)
+            };
+
+            let _ = app
+                .notification()
+                .builder()
+                .title("📅 D-Day Todo 알림")
+                .body(&body)
+                .show();
+        }
+    }
+}
+
+// 백그라운드 스케줄러
+fn start_scheduler(app: AppHandle) {
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(60));
+            check_notifications(&app);
+        }
+    });
+}
+
+// CRUD Commands
 #[tauri::command]
 fn todo_get_all() -> Result<Vec<Todo>, String> {
     Ok(read_todos())
@@ -90,8 +145,51 @@ fn todo_delete(id: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            // 시스템 트레이 메뉴 생성
+            let open = MenuItem::with_id(app, "open", "열기", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &quit])?;
+
+            // 트레이 아이콘 생성
+            TrayIconBuilder::new()
+                .menu(&menu)
+                .tooltip("D-Day Todo")
+                .on_tray_icon_event(|tray, event| {
+                    // 트레이 아이콘 클릭 시 창 표시
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
+            // 백그라운드 스케줄러 시작
+            start_scheduler(app.handle().clone());
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             todo_get_all,
             todo_add,

@@ -4,6 +4,7 @@ import TodoList from "./components/TodoList";
 import { Todo } from "./types/todo";
 import "./App.css";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 function App() {
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -12,6 +13,13 @@ function App() {
 
   useEffect(() => {
     loadTodos();
+
+    // 창 닫기 버튼 -> 시스템 트레이로 숨기기
+    const win = getCurrentWindow();
+    win.onCloseRequested((e) => {
+      e.preventDefault();
+      win.hide();
+    })
   }, []);
 
   const loadTodos = async () => {
